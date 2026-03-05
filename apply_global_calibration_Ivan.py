@@ -28,7 +28,7 @@ def ft_spectrum_from_interferogram(
     x_opd_m,
     y,
     N=2**19,
-    window="blackmanharris", #blackmanharris or hann
+    window="blackmanharris", #hann or blackmanharris
     detrend_type="linear",
     interp_kind="linear",
     use_real_spectrum=True,
@@ -132,11 +132,28 @@ def data_i(
 
 def data_g(file):
     """
-    Load already-computed grating spectrum from read_data4 format.
+    Load already-computed grating spectrum.
+    Handles both comma and semicolon delimiters automatically.
     Returns: [name, wavelength_array, intensity_array]
     """
-    results = rdsp.read_data4("data/" + file + ".txt")
-    return [file, np.array(results[0]), np.array(results[1])]
+    path = "data/" + file + ".txt"
+    wavelengths, intensities = [], []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            # Try comma first, then semicolon
+            for delim in (',', ';'):
+                parts = line.split(delim)
+                if len(parts) == 2:
+                    try:
+                        wavelengths.append(float(parts[0]))
+                        intensities.append(float(parts[1]))
+                        break
+                    except ValueError:
+                        continue
+    return [file, np.array(wavelengths), np.array(intensities)]
 
 
 def to_wavelength(x_nu):
