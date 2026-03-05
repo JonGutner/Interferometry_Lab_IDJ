@@ -28,7 +28,7 @@ def ft_spectrum_from_interferogram(
     x_opd_m,
     y,
     N=2**19,
-    window="blackmanharris",
+    window="blackmanharris", #blackmanharris or hann
     detrend_type="linear",
     interp_kind="linear",
     use_real_spectrum=True,
@@ -39,7 +39,7 @@ def ft_spectrum_from_interferogram(
 
     Returns:
       nu        : axis in cycles/m (from rfftfreq)
-      intensity : spectrum on nu axis (real-part or magnitude) - NOT normalised
+      intensity : spectrum on nu axis - NOT normalised
       meta      : dict with diagnostics
     """
     y = np.asarray(y, dtype=float)
@@ -62,7 +62,7 @@ def ft_spectrum_from_interferogram(
         raise ValueError("window must be one of: 'hann', 'blackmanharris', 'kaiser14'")
     y = y * w
 
-    # Resample onto uniform OPD grid (FFT requires uniform sampling)
+    # Resample onto uniform OPD grid
     xs = np.linspace(x.min(), x.max(), int(N))
     f = spi.interp1d(x, y, kind=interp_kind, fill_value="extrapolate")
     ys = f(xs)
@@ -103,11 +103,11 @@ def data_i(
     file,
     metres_per_microstep=3.66e-11,
     N=2**19,
-    window="blackmanharris",
+    window="hann",
     use_real_spectrum=True,
 ):
     """
-    Load interferogram from your 'read_data3' format and compute FT spectrum.
+    Load interferogram from read_data3 format and compute FT spectrum.
     Returns: [name, nu_axis, intensity, meta]
     """
     results = rd.read_data3("data/" + file + ".txt")
@@ -131,81 +131,13 @@ def data_i(
 
 
 def data_g(file):
+    """
+    Load already-computed grating spectrum from read_data4 format.
+    Returns: [name, wavelength_array, intensity_array]
+    """
     results = rdsp.read_data4("data/" + file + ".txt")
-    return [file, results[0], results[1]]
+    return [file, np.array(results[0]), np.array(results[1])]
 
-
-# -----------------------------
-# Artifact quantification
-# -----------------------------
-
-def quantify_artifacts(
-    x_axis,
-    intensity,
-    smooth_window=None,
-    poly=3,
-    prominence_mode="sigma",
-    prominence_frac=0.02,
-    prominence_sigma=3.0,
-    band=None,
-):
-    """
-    Subtract smooth envelope and detect peaks in residual.
-    Works on raw (non-normalised) intensity.
-
-    Returns:
-      rms_ratio, x_used, y_used, env, residual, peak_table
-    """
-    x = np.asarray(x_axis, dtype=float)
-    y = np.asarray(intensity, dtype=float)
-
-    # Sort ascending x
-    idx = np.argsort(x)
-    x = x[idx]
-    y = y[idx]
-
-    # Band limit (optional)
-    if band is not None:
-        m = (x >= band[0]) & (x <= band[1])
-        x = x[m]
-        y = y[m]
-
-    # Choose smoothing window adaptively if not provided
-    if smooth_window is None:
-        smooth_window = max(51, (len(y) // 50) | 1)
-    smooth_window = min(smooth_window, len(y) - (1 - len(y) % 2))
-    if smooth_window % 2 == 0:
-        smooth_window -= 1
-    smooth_window = max(poly + 2 + (poly + 2) % 2, smooth_window)
-
-    env = sps.savgol_filter(y, smooth_window, poly)
-    residual = y - env
-
-    if prominence_mode == "frac":
-        prom = prominence_frac * np.max(y) if np.max(y) != 0 else prominence_frac
-    elif prominence_mode == "sigma":
-        prom = float(prominence_sigma * np.std(residual))
-    else:
-        raise ValueError("prominence_mode must be 'frac' or 'sigma'")
-
-    peaks, props = sps.find_peaks(residual, prominence=prom)
-
-    artifact_rms = float(np.sqrt(np.mean(residual**2)))
-    signal_rms = float(np.sqrt(np.mean(y**2))) if np.mean(y**2) > 0 else np.nan
-    rms_ratio = artifact_rms / signal_rms if signal_rms and not np.isnan(signal_rms) else np.nan
-
-    peak_table = {
-        "x_axis": x[peaks],
-        "residual_height": residual[peaks],
-        "prominence": props.get("prominences", np.array([])),
-    }
-
-    return rms_ratio, x, y, env, residual, peak_table
-
-
-# -----------------------------
-# Plotting
-# -----------------------------
 
 def to_wavelength(x_nu):
     """Convert nu (cycles/m) -> wavelength (m) safely."""
@@ -217,58 +149,22 @@ def to_wavelength(x_nu):
     return wl
 
 
-def plot_spectrum(nu, intensity, label, display_as_wavelength=True):
-    """Plot raw (non-normalised) intensity."""
-    y = np.asarray(intensity, dtype=float)
-
-    if display_as_wavelength:
-        wl = to_wavelength(nu)
-        m = np.isfinite(wl)
-        plt.plot(wl[m], y[m], label=label)
-        plt.xlabel("Wavelength (m)  [display: 1/nu]")
-    else:
-        plt.plot(nu, y, label=label)
-        plt.xlabel("nu (cycles/m)")
-    plt.ylabel("Intensity (a.u.)")
-
-
-def plot_artifacts(x_used, y_used, env, residual, peak_table, title, display_as_wavelength=True):
-    plt.figure(title)
-    plt.title(title)
-
-    if display_as_wavelength:
-        wl = to_wavelength(x_used)
-        m = np.isfinite(wl)
-        order = np.argsort(wl[m])
-        xx = wl[m][order]
-        yy = y_used[m][order]
-        ee = env[m][order]
-        rr = residual[m][order]
-
-        plt.plot(xx, yy, label="Signal")
-        plt.plot(xx, ee, label="Envelope (SavGol)")
-        plt.plot(xx, rr, label="Residual")
-
-        if len(peak_table["x_axis"]):
-            pk_wl = to_wavelength(peak_table["x_axis"])
-            pk_m = np.isfinite(pk_wl)
-            pk_wl = pk_wl[pk_m]
-            r_at_pk = np.interp(pk_wl, xx, rr)
-            plt.scatter(pk_wl, r_at_pk, marker="x", label="Residual peaks")
-        plt.xlabel("Wavelength (m)  [display: 1/nu]")
-    else:
-        plt.plot(x_used, y_used, label="Signal")
-        plt.plot(x_used, env, label="Envelope (SavGol)")
-        plt.plot(x_used, residual, label="Residual")
-
-        if len(peak_table["x_axis"]):
-            r_at_pk = np.interp(peak_table["x_axis"], x_used, residual)
-            plt.scatter(peak_table["x_axis"], r_at_pk, marker="x", label="Residual peaks")
-        plt.xlabel("nu (cycles/m)")
-
-    plt.grid(True)
-    plt.legend()
-    plt.ylabel("Intensity / Residual (a.u.)")
+def extract_envelope(y, polyorder=3):
+    """
+    Extract smooth envelope using Savitzky-Golay filter.
+    Window ~33% of points to average over etalon fringe period.
+    Must be odd and > polyorder.
+    """
+    n = len(y)
+    window = max(polyorder + 2, (n // 3) | 1)
+    if window % 2 == 0:
+        window += 1
+    window = min(window, n - (1 - n % 2))
+    if window % 2 == 0:
+        window -= 1
+    window = max(window, polyorder + 2 + (polyorder + 2) % 2)
+    print(f"  Envelope window: {window} samples over {n} points")
+    return sps.savgol_filter(y, window_length=window, polyorder=polyorder)
 
 
 # -----------------------------
@@ -278,14 +174,16 @@ def plot_artifacts(x_used, y_used, env, residual, peak_table, title, display_as_
 if __name__ == "__main__":
 
     # ---------------------------------------------------------------
-    # USER INPUT - comma separated file names (no .txt extension)
-    # e.g.: white_light_4,white_light_5
+    # USER INPUT
     # ---------------------------------------------------------------
-    files_i = str(input("Interferogram files (comma separated): ")).split(",")
-    files_i = [f.strip() for f in files_i]
+    files_i_input = input("Interferogram files - need FT (comma separated, blank to skip): ").strip()
+    files_g_input = input("Grating files - already spectra (comma separated, blank to skip): ").strip()
+
+    files_i = [f.strip() for f in files_i_input.split(",") if f.strip()] if files_i_input else []
+    files_g = [f.strip() for f in files_g_input.split(",") if f.strip()] if files_g_input else []
 
     # ---------------------------------------------------------------
-    # SETTINGS - adjust as needed
+    # SETTINGS
     # ---------------------------------------------------------------
     metres_per_microstep = 3.66e-11
     N = 2**19
@@ -293,57 +191,151 @@ if __name__ == "__main__":
     use_real_spectrum = True  # False to use abs()
     # ---------------------------------------------------------------
 
-    plt.figure("Spectrum (displayed vs wavelength)")
-    plt.title("FT Spectrum (computed in nu, displayed as wavelength=1/nu)")
+    # ---------------------------------------------------------------
+    # SINGLE-POINT CALIBRATION USING 450nm PEAK
+    # ---------------------------------------------------------------
+    if files_i and files_g:
+        name_nom, nu_nom, intensity_nom, _ = data_i(
+            files_i[0],
+            metres_per_microstep=metres_per_microstep,
+            N=N, window=window, use_real_spectrum=use_real_spectrum,
+        )
+        wl_nom = to_wavelength(nu_nom)
 
+        name_g0, wl_g0, int_g0 = data_g(files_g[0])
+
+        mask_blue = np.isfinite(wl_nom) & (wl_nom > 420e-9) & (wl_nom < 480e-9)
+        blue_peak_wl = wl_nom[mask_blue][np.argmax(intensity_nom[mask_blue])]
+
+        mask_orange = (wl_g0 > 420e-9) & (wl_g0 < 480e-9)
+        orange_peak_wl = wl_g0[mask_orange][np.argmax(int_g0[mask_orange])]
+
+        scale_factor = orange_peak_wl / blue_peak_wl
+        metres_per_microstep_fitted = metres_per_microstep * scale_factor
+
+        print(f"\nCalibration:")
+        print(f"  Blue peak (nominal):  {blue_peak_wl*1e9:.2f} nm")
+        print(f"  Orange peak:          {orange_peak_wl*1e9:.2f} nm")
+        print(f"  Scale factor:         {scale_factor:.6f}")
+        print(f"  Fitted m/microstep:   {metres_per_microstep_fitted:.4e}")
+    else:
+        metres_per_microstep_fitted = metres_per_microstep
+        print("\nCalibration skipped (need both interferogram and grating files)")
+
+    # ---------------------------------------------------------------
+    # LOAD ALL FILES WITH FITTED CALIBRATION
+    # ---------------------------------------------------------------
+    interferograms = []
     for file in files_i:
         name, nu, intensity, meta = data_i(
             file,
-            metres_per_microstep=metres_per_microstep,
-            N=N,
-            window=window,
-            use_real_spectrum=use_real_spectrum,
+            metres_per_microstep=metres_per_microstep_fitted,
+            N=N, window=window, use_real_spectrum=use_real_spectrum,
         )
-
-        print(f"\n--- {name} ---")
+        wl = to_wavelength(nu)
+        interferograms.append((name, wl, intensity))
+        print(f"\n--- {name} (interferogram) ---")
         print("Diagnostics:", meta)
 
-        # Quantify artifacts in nu-space
-        nu_min = np.quantile(nu, 0.10)
-        nu_max = np.quantile(nu, 0.90)
+    gratings = []
+    for file in files_g:
+        name, wl, intensity = data_g(file)
+        gratings.append((name, wl, intensity))
 
-        rms_ratio, x_used, y_used, env, residual, peak_table = quantify_artifacts(
-            nu,
-            intensity,
-            smooth_window=None,
-            poly=3,
-            prominence_mode="sigma",
-            prominence_sigma=3.0,
-            band=(nu_min, nu_max),
-        )
+    # ---------------------------------------------------------------
+    # COMPUTE RATIO AND CORRECTED INTERFEROMETER FOR EACH PAIR
+    # ratio = raw_blue_envelope / raw_orange_envelope  (no normalisation)
+    # corrected_i = interferometer / ratio  (interferometer scaled to grating units)
+    # This avoids propagating oscillations into the corrected spectrum
+    # ---------------------------------------------------------------
+    pairs = []
 
-        # Print top 10 peaks by prominence
-        order = np.argsort(peak_table["prominence"])[::-1]
-        print(f"\nTop residual peaks (nu-space) for {name}:")
-        for i in order[:10]:
-            print(f"  nu = {peak_table['x_axis'][i]:.4e}  prom = {peak_table['prominence'][i]:.4e}")
+    for i_name, i_wl, i_intensity in interferograms:
+        for g_name, g_wl, g_intensity in gratings:
 
-        print(f"\nArtifact RMS / Signal RMS: {rms_ratio:.4f}")
+            # Work on full visible range for envelope extraction
+            vis_mask = np.isfinite(i_wl) & (i_wl > 380e-9) & (i_wl < 750e-9)
+            wl_vis = i_wl[vis_mask]
+            int_vis = i_intensity[vis_mask]
 
-        # Plot on shared figure
-        plot_spectrum(nu, intensity, label=name, display_as_wavelength=True)
+            # Interpolate grating onto full visible interferometer axis
+            g_vis = np.interp(wl_vis, g_wl, g_intensity, left=np.nan, right=np.nan)
+            g_vis_clean = np.where(np.isfinite(g_vis), g_vis, 0.0)
 
-        # Separate artifact figure per file
-        plot_artifacts(
-            x_used, y_used, env, residual, peak_table,
-            title=f"Artifacts - {name}",
-            display_as_wavelength=True,
-        )
-        plt.xlim(3.5e-7, 8e-7)
+            print(f"\nRatio {i_name} / {g_name}:")
 
-    # Finalise shared spectrum figure
-    plt.figure("Spectrum (displayed vs wavelength)")
+            # Extract raw envelopes from full visible range - NO normalisation
+            blue_env_full = extract_envelope(int_vis)
+            orange_env_full = extract_envelope(g_vis_clean)
+
+            # Clip negatives
+            blue_env_full = np.clip(blue_env_full, 0, None)
+            orange_env_full = np.clip(orange_env_full, 1e-10, None)
+
+            # Raw ratio - no normalisation applied
+            ratio_full = blue_env_full / orange_env_full
+
+            # Restrict ratio to reliable window (430-600nm)
+            ratio_mask = (wl_vis > 430e-9) & (wl_vis < 600e-9) & np.isfinite(g_vis)
+            wl_ratio = wl_vis[ratio_mask]
+            ratio_reliable = ratio_full[ratio_mask]
+
+            # Smooth ratio for plotting only (removes residual oscillations from display)
+            ratio_plot = extract_envelope(ratio_reliable)
+
+            # Corrected interferometer: interferometer / ratio
+            # Interpolate ratio onto full interferometer wavelength axis
+            ratio_on_i = np.interp(i_wl, wl_ratio, ratio_reliable,
+                                   left=ratio_reliable[0], right=ratio_reliable[-1])
+            ratio_on_i = np.clip(ratio_on_i, 1e-10, None)
+            corrected_i = i_intensity / ratio_on_i
+
+            pairs.append((i_name, i_wl, i_intensity, corrected_i,
+                          g_name, g_wl, g_intensity,
+                          wl_ratio, ratio_reliable, ratio_plot))
+
+    # ---------------------------------------------------------------
+    # PLOT 1: Corrected interferometer vs grating (both in grating units)
+    # ---------------------------------------------------------------
+    plt.figure("Spectra")
+    plt.title("Corrected interferometer vs grating")
+
+    for (i_name, i_wl, i_intensity, corrected_i,
+         g_name, g_wl, g_intensity,
+         wl_ratio, ratio_reliable, ratio_plot) in pairs:
+
+        m = np.isfinite(i_wl)
+        plt.plot(i_wl[m], corrected_i[m], label=f"{i_name} corrected")
+        plt.plot(g_wl, g_intensity, linestyle='--', label=g_name)
+
+    # Also plot any ungrouped gratings
+    paired_g_names = [p[4] for p in pairs]
+    for g_name, g_wl, g_intensity in gratings:
+        if g_name not in paired_g_names:
+            plt.plot(g_wl, g_intensity, linestyle='--', label=g_name)
+
     plt.xlim(3.5e-7, 8e-7)
+    plt.xlabel("Wavelength (m)")
+    plt.ylabel("Intensity (a.u.)")
     plt.grid(True)
     plt.legend()
+
+    # ---------------------------------------------------------------
+    # PLOT 2: Smoothed ratio (430-600nm) - oscillations removed
+    # ---------------------------------------------------------------
+    if pairs:
+        plt.figure("Smoothed envelope ratio (430-600nm)")
+        plt.title("Smoothed envelope ratio: interferogram / grating (430-600nm)")
+
+        for (i_name, i_wl, i_intensity, corrected_i,
+             g_name, g_wl, g_intensity,
+             wl_ratio, ratio_reliable, ratio_plot) in pairs:
+            plt.plot(wl_ratio, ratio_reliable, alpha=0.3, label=f"{i_name} / {g_name} (raw)")
+            plt.plot(wl_ratio, ratio_plot, linewidth=2, label=f"{i_name} / {g_name} (smoothed)")
+
+        plt.xlabel("Wavelength (m)")
+        plt.ylabel("Ratio (a.u.)")
+        plt.grid(True)
+        plt.legend()
+
     plt.show()
