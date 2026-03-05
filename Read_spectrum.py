@@ -13,5 +13,5 @@ def read_data4(fname):
     return x, y
 
 x, y = read_data4('data/White_LED_Lens.txt')
-plt.plot(x, y)
-plt.show()
+# plt.plot(x, y)
+# plt.show()
