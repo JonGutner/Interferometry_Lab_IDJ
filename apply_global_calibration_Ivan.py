@@ -262,7 +262,7 @@ if __name__ == "__main__":
     # Accepts scalar (single notch) or list (multiple notches), e.g.:
     #   notch_opd_um        = [38.0, 2.0]
     #   notch_half_width_um = [2.0,  1.0]
-    notch_opd_um = [38.0, 1.5, 3.0, 5.0, 10.0, 20.0]
+    notch_opd_um = None# [38.0, 1.5, 3.0, 5.0, 10.0, 20.0]
     notch_half_width_um = [2.0, 0.3, 0.3, 0.3, 0.5, 1.0]
 
     # ---------------------------------------------------------------
@@ -341,8 +341,8 @@ if __name__ == "__main__":
         if notch_opd_um is not None:
             plt.plot(wl[m], int_clean[m], linewidth=2, label=f"{name} (fringe removed)")
 
-    for g_name, g_wl, g_intensity in gratings:
-        plt.plot(g_wl, g_intensity, linestyle='--', label=g_name)
+    # for g_name, g_wl, g_intensity in gratings:
+    #     plt.plot(g_wl, g_intensity, linestyle='--', label=g_name)
 
     plt.xlim(3.5e-7, 8e-7)
     plt.xlabel("Wavelength (m)")
